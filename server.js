@@ -20,7 +20,7 @@ app.use(bodyParser.json());
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // In-memory user store (to be replaced with a real DB like Firestore later)
-const userDB = {};
+const usersRef = db.collection("users");
 
 function checkAccess(email, feature) {
   const today = new Date().toISOString().split("T")[0];
@@ -28,7 +28,8 @@ function checkAccess(email, feature) {
     return { allowed: false, message: "❌ User not found" };
   }
 
-  const user = userDB[email];
+ const userSnap = await usersRef.doc(email).get();
+const user = userSnap.exists ? userSnap.data() : null;
   if (user.plan === "paid") return { allowed: true };
 
   if (feature === "flashcards") {
@@ -70,12 +71,12 @@ app.post("/api/:mode", async (req, res) => {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
-  if (!userDB[email]) {
-    userDB[email] = {
-      plan: email === "paid@example.com" ? "paid" : "free",
-      lastUsed: {},
-      usageCount: {},
-    };
+  await usersRef.doc(email).set({
+  plan: email === "paid@example.com" ? "paid" : "free",
+  lastUsed: {},
+  usageCount: {},
+});
+
   }
 
   const access = checkAccess(email, mode);
