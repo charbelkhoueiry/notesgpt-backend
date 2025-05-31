@@ -6,6 +6,7 @@ admin.initializeApp({
 });
 
 const db = admin.firestore();
+const usersRef = db.collection("users");
 
 const express = require("express");
 const cors = require("cors");
@@ -19,18 +20,27 @@ app.use(bodyParser.json());
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// In-memory user store (to be replaced with a real DB like Firestore later)
-const usersRef = db.collection("users");
-
-function checkAccess(email, feature) {
+// ⬇️ Helper function to check access for user
+async function checkAccess(email, feature) {
   const today = new Date().toISOString().split("T")[0];
-  if (!userDB[email]) {
-    return { allowed: false, message: "❌ User not found" };
+
+  const userRef = usersRef.doc(email);
+  const userSnap = await userRef.get();
+  let user = userSnap.exists ? userSnap.data() : null;
+
+  // Create new user if not found
+  if (!user) {
+    user = {
+      plan: email === "paid@example.com" ? "paid" : "free",
+      lastUsed: {},
+      usageCount: {},
+    };
   }
 
- const userSnap = await usersRef.doc(email).get();
-const user = userSnap.exists ? userSnap.data() : null;
-  if (user.plan === "paid") return { allowed: true };
+  if (user.plan === "paid") {
+    await userRef.set(user, { merge: true });
+    return { allowed: true, user };
+  }
 
   if (feature === "flashcards") {
     return { allowed: false, message: "🚫 Flashcards not available for free users" };
@@ -52,9 +62,14 @@ const user = userSnap.exists ? userSnap.data() : null;
   }
 
   user.usageCount[feature] = (user.usageCount[feature] || 0) + 1;
-  return { allowed: true };
+
+  // Save updated usage to Firestore
+  await userRef.set(user, { merge: true });
+
+  return { allowed: true, user };
 }
 
+// ⬇️ OpenAI prompt handler
 async function generateContent(prompt) {
   const completion = await openai.chat.completions.create({
     messages: [{ role: "user", content: prompt }],
@@ -63,6 +78,7 @@ async function generateContent(prompt) {
   return completion.choices[0].message.content;
 }
 
+// ⬇️ Main API route
 app.post("/api/:mode", async (req, res) => {
   const { topic, grade, bacType, email } = req.body;
   const { mode } = req.params;
@@ -71,15 +87,7 @@ app.post("/api/:mode", async (req, res) => {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
-  await usersRef.doc(email).set({
-  plan: email === "paid@example.com" ? "paid" : "free",
-  lastUsed: {},
-  usageCount: {},
-});
-
-  }
-
-  const access = checkAccess(email, mode);
+  const access = await checkAccess(email, mode);
   if (!access.allowed) {
     return res.status(403).json({ error: access.message });
   }
@@ -89,6 +97,7 @@ app.post("/api/:mode", async (req, res) => {
   res.json({ result });
 });
 
+// ⬇️ Health check
 app.get("/", (req, res) => {
   res.send("✅ NotesGPT backend is live.");
 });
